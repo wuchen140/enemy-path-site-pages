@@ -812,6 +812,7 @@
     const storageKey = "path-atlas-levels-v6";
     const editsKey = "path-atlas-unsaved-v6";
     let levels = loadLevels();
+    let excelExportCache = null;
     let activeView = "viewer";
     let activeFilter = "all";
     let selectedLevelId = levelKey(levels[0]);
@@ -889,6 +890,7 @@
     }
 
     function persistLevels() {
+      excelExportCache = null;
       levels.sort((a, b) => Number(a.id) - Number(b.id) || levelKey(a).localeCompare(levelKey(b)));
       localStorage.setItem(storageKey, JSON.stringify(levels));
       localStorage.setItem(editsKey, String(Number(localStorage.getItem(editsKey) || 0) + 1));
@@ -2221,6 +2223,7 @@
     });
 
     function persistAndRender(save = true) {
+      excelExportCache = null;
       refreshCounts(currentLevel());
       if (save) persistLevels();
       if (activeView === "viewer") renderGrid();
@@ -2474,7 +2477,7 @@
       }
     }
 
-    function exportCurrentExcel() {
+    function buildExcelExport() {
       const exportLevels = savedLevelsForExport();
       const levelRows = [
         ["关卡id","关卡名","关卡名_EN","龙数","龙id","普通难度系数","困难难度系数","地狱难度系数","最高速度","冲刺时间","冲刺冷却","起始冲刺截止节点","冲刺禁止节点","龙1路径","龙2路径","龙3路径","龙4路径","龙5路径"],
@@ -2504,10 +2507,30 @@
         { name: "xl/worksheets/sheet2.xml", content: sheetXml(dragonRowsSheet) },
       ];
       const blob = new Blob([makeZip(files)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      downloadBlob(blob, `关卡数据_编辑器导出_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      return {
+        blob,
+        filename: `关卡数据_编辑器导出_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      };
     }
 
-    document.querySelector("#exportExcel").addEventListener("click", exportCurrentExcel);
+    function prepareExcelExport() {
+      if (!excelExportCache) excelExportCache = buildExcelExport();
+      return excelExportCache;
+    }
+
+    function exportCurrentExcel() {
+      const file = prepareExcelExport();
+      downloadBlob(file.blob, file.filename);
+    }
+
+    const exportExcelButton = document.querySelector("#exportExcel");
+    // Building the workbook during Safari's click handler can outlive its user-activation window.
+    exportExcelButton.addEventListener("pointerdown", prepareExcelExport);
+    exportExcelButton.addEventListener("focus", prepareExcelExport);
+    exportExcelButton.addEventListener("click", exportCurrentExcel);
+
+    const scheduleExcelExport = window.requestIdleCallback || (callback => setTimeout(callback, 0));
+    scheduleExcelExport(prepareExcelExport);
 
     renderGrid();
     renderEditor();
