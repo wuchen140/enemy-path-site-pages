@@ -310,8 +310,9 @@
     .pill { padding: 7px 10px; border-radius: 999px; color: #344054; background: #f2f4f7; font-size: 12px; font-weight: 900; }
     .dungeon-card .badge { background: rgba(182, 83, 9, .78); }
     .dungeon-card .thumb { background: linear-gradient(135deg, rgba(255,149,0,.16), rgba(52,199,89,.08)), #f8fafc; }
-    .card-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
-    .card-actions .download-link { min-height: 38px; padding: 0 13px; border-radius: 12px; font-size: 13px; }
+    .card-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .card-actions .download-link, .card-actions .dungeon-edit { min-height: 38px; padding: 0 13px; border-radius: 12px; font-size: 13px; }
+    .dungeon-card.is-edited { border-color: rgba(52,199,89,.55); box-shadow: 0 16px 46px rgba(52,199,89,.12); }
 
     .editor-layout {
       display: grid;
@@ -715,8 +716,9 @@
       <section class="toolbar">
         <input id="dungeonSearch" class="search" type="search" placeholder="搜索难度、地图 ID 或敌人 ID，比如 5 / 64 / 995">
         <div class="toolbar-actions">
-          <a class="success download-link" href="assets/dungeon_paths.xlsx" download="打金猪副本路径.xlsx">导出副本 Excel</a>
-          <a class="ghost download-link" href="assets/dungeon_paths.json" download="打金猪副本路径.json">导出副本 JSON</a>
+          <a id="exportDungeonExcel" class="success download-link" data-static-href="assets/dungeon_paths.xlsx?v=3b14d07" href="assets/dungeon_paths.xlsx?v=3b14d07" download="打金猪副本路径.xlsx">导出副本 Excel</a>
+          <a id="exportDungeonJson" class="ghost download-link" data-static-href="assets/dungeon_paths.json?v=3b14d07" href="assets/dungeon_paths.json?v=3b14d07" download="打金猪副本路径.json">导出副本 JSON</a>
+          <button id="copyDungeonConfig" class="primary" type="button" hidden>复制已编辑配置</button>
         </div>
       </section>
       <section id="dungeonGrid" class="grid"></section>
@@ -726,21 +728,22 @@
     <section id="editor" class="view">
       <header class="hero">
         <div>
-          <div class="eyebrow" style="color: var(--green)">path edit mode</div>
-          <h1>关卡路径编辑器</h1>
-          <p>新建关卡、选择现有关卡，用画笔直接绘制敌人路径；可以拖动节点微调，也可以用橡皮删除节点或整条路径。</p>
-          <p class="hint">保存后点击“导出 Excel”，导出的路径点会和编辑器当前保存的形状保持一致。</p>
+          <div id="editorEyebrow" class="eyebrow" style="color: var(--green)">path edit mode</div>
+          <h1 id="editorTitle">关卡路径编辑器</h1>
+          <p id="editorDescription">新建关卡、选择现有关卡，用画笔直接绘制敌人路径；可以拖动节点微调，也可以用橡皮删除节点或整条路径。</p>
+          <p id="editorHint" class="hint">保存后点击“导出 Excel”，导出的路径点会和编辑器当前保存的形状保持一致。</p>
         </div>
         <div class="stat-row" style="gap:10px">
           <button id="newFromBlank" class="primary">+ 新建关卡</button>
+          <button id="restoreDungeonPath" class="soft-danger" type="button" hidden>恢复原始路径</button>
           <button id="saveLocal" class="success">保存修改</button>
         </div>
       </header>
 
       <section class="editor-layout">
         <aside class="panel">
-          <h2>关卡管理</h2>
-          <p class="hint">按关卡顺序管理路径，可复制现有关卡或从空白模板创建。</p>
+          <h2 id="levelManagerTitle">关卡管理</h2>
+          <p id="levelManagerHint" class="hint">按关卡顺序管理路径，可复制现有关卡或从空白模板创建。</p>
           <button id="blankLevel" class="primary" style="width:100%; margin-bottom:12px">从空白创建</button>
           <input id="levelSearch" class="search" style="width:100%; height:44px; margin-bottom:12px" type="search" placeholder="搜索关卡">
           <div id="levelList" class="level-list"></div>
@@ -831,7 +834,7 @@
         </aside>
       </section>
 
-      <section class="quick-create">
+      <section id="quickCreate" class="quick-create">
         <div>
           <strong style="font-size:22px; letter-spacing:-.04em">快速新建关卡</strong>
           <p class="hint" style="margin:5px 0 0">从空白路径开始，或复制当前关卡作为模板。</p>
@@ -859,6 +862,7 @@
     const colors = ["#E53935", "#1E88E5", "#43A047", "#FB8C00", "#8E24AA"];
     const storageKey = "path-atlas-levels-v6";
     const editsKey = "path-atlas-unsaved-v6";
+    const dungeonStorageKey = "path-atlas-dungeon-paths-v1";
     let levels = loadLevels();
     let excelExportCache = null;
     const dungeonConfigs = [
@@ -873,6 +877,9 @@
       { difficulty: 9, mapId: 100, enemyId: 991, coinPerEnemy: 100 },
       { difficulty: 10, mapId: 97, enemyId: 990, coinPerEnemy: 110 }
     ];
+    let dungeonLevels = loadDungeonLevels();
+    let dungeonConfigRecords = [];
+    let editorScope = "main";
     let activeView = "viewer";
     let activeFilter = "all";
     let selectedLevelId = levelKey(levels[0]);
@@ -904,12 +911,74 @@
     const canvasWrap = document.querySelector(".canvas-wrap");
     const ctx = canvas.getContext("2d");
 
+    fetch("assets/dungeon_paths.json?v=3b14d07")
+      .then(response => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then(records => {
+        dungeonConfigRecords = Array.isArray(records) ? records : [];
+        refreshDungeonExportLinks();
+      })
+      .catch(error => console.warn("副本配置加载失败，已编辑导出暂不可用。", error));
+
     function levelKey(level) {
       return String(level?._uid ?? level?.id ?? "");
     }
 
     function clone(value) {
       return JSON.parse(JSON.stringify(value));
+    }
+
+    function editorLevels() {
+      return editorScope === "dungeon" ? dungeonLevels : levels;
+    }
+
+    function loadDungeonLevels() {
+      let saved = {};
+      try {
+        saved = JSON.parse(localStorage.getItem(dungeonStorageKey) || "{}");
+      } catch {
+        saved = {};
+      }
+      return dungeonConfigs.map(config => {
+        const source = window.dungeonPathData?.[String(config.difficulty)] || {};
+        const savedEntry = saved[String(config.difficulty)];
+        const originalPath = Array.isArray(source.points) ? source.points : [];
+        const path = Array.isArray(savedEntry?.path) ? savedEntry.path : originalPath;
+        return {
+          _uid: `dungeon-${config.difficulty}`,
+          _kind: "dungeon",
+          id: config.difficulty,
+          difficulty: config.difficulty,
+          mapId: config.mapId,
+          enemyId: config.enemyId,
+          coinPerEnemy: config.coinPerEnemy,
+          name: `打金猪 · 难度 ${config.difficulty}`,
+          nameEn: `Dungeon ${String(config.difficulty).padStart(2, "0")}`,
+          dragonCount: 1,
+          pathCount: path.length ? 1 : 0,
+          paths: [clone(path)],
+          image: source.image || `assets/dungeon_level_${String(config.difficulty).padStart(2, "0")}.png`,
+          boxes: [],
+          dragons: [{ dragonId: config.enemyId, pathIndex: 0, hpCount: 70, hpArray: [], boxes: [] }],
+          edited: Boolean(savedEntry),
+        };
+      });
+    }
+
+    function persistDungeonLevels() {
+      const payload = Object.fromEntries(dungeonLevels
+        .filter(level => level.edited)
+        .map(level => [String(level.difficulty), { path: clone(level.paths?.[0] || []) }]));
+      localStorage.setItem(dungeonStorageKey, JSON.stringify(payload));
+      refreshDungeonExportLinks();
+    }
+
+    function hasDungeonEdits() {
+      return dungeonLevels.some(level => level.edited);
+    }
+
+    function dungeonPathIsOriginal(level) {
+      const original = window.dungeonPathData?.[String(level.difficulty)]?.points || [];
+      return JSON.stringify(level.paths?.[0] || []) === JSON.stringify(original);
     }
 
     function hasPathData(level) {
@@ -957,7 +1026,8 @@
     }
 
     function currentLevel() {
-      return levels.find(level => levelKey(level) === String(selectedLevelId)) || levels[0];
+      const source = editorLevels();
+      return source.find(level => levelKey(level) === String(selectedLevelId)) || source[0];
     }
 
     function currentPath() {
@@ -1041,7 +1111,27 @@
       }
     }
 
-    document.querySelectorAll(".tab[data-view]").forEach(tab => tab.addEventListener("click", () => setView(tab.dataset.view)));
+    function beginEditorSession(scope, key) {
+      editorScope = scope;
+      const source = editorLevels();
+      selectedLevelId = key || levelKey(source[0]);
+      activePathIndex = 0;
+      clearNodeSelection();
+      history = [];
+      future = [];
+      resetViewport(currentLevel());
+      setView("editor");
+    }
+
+    function openDungeonEditor(difficulty) {
+      const level = dungeonLevels.find(item => Number(item.difficulty) === Number(difficulty));
+      if (level) beginEditorSession("dungeon", levelKey(level));
+    }
+
+    document.querySelectorAll(".tab[data-view]").forEach(tab => tab.addEventListener("click", () => {
+      if (tab.dataset.view === "editor") beginEditorSession("main", levelKey(levels[0]));
+      else setView(tab.dataset.view);
+    }));
 
     function previewSignature(level) {
       return JSON.stringify({
@@ -1269,25 +1359,30 @@
     function resolvedDungeonLevels() {
       return dungeonConfigs.map(config => {
         const dungeon = window.dungeonPathData?.[String(config.difficulty)] || {};
-        const path = Array.isArray(dungeon.points) ? dungeon.points : [];
+        const editorLevel = dungeonLevels.find(item => Number(item.difficulty) === Number(config.difficulty));
+        const path = Array.isArray(editorLevel?.paths?.[0]) ? editorLevel.paths[0] : (Array.isArray(dungeon.points) ? dungeon.points : []);
+        const edited = Boolean(editorLevel?.edited);
         return {
           ...config,
           ...dungeon,
-          image: dungeon.image || `assets/dungeon_level_${String(config.difficulty).padStart(2, "0")}.png`,
+          image: edited
+            ? pathPreviewImage(editorLevel, 1200, 900)
+            : (dungeon.image || `assets/dungeon_level_${String(config.difficulty).padStart(2, "0")}.png`),
           path,
-          rawPointCount: Number(dungeon.rawPointCount ?? path.length),
-          runtimePointCount: Number(dungeon.runtimePointCount ?? calculateRuntimePointCount(path)),
-          pathLength: Number(dungeon.pathLength ?? calculatePathLength(path))
+          edited,
+          rawPointCount: path.length,
+          runtimePointCount: calculateRuntimePointCount(path),
+          pathLength: calculatePathLength(path)
         };
       });
     }
 
     function dungeonCardTemplate(level) {
       const title = `打金猪 · 难度 ${level.difficulty}`;
-      return `<article class="card dungeon-card" data-difficulty="${level.difficulty}">
+      return `<article class="card dungeon-card ${level.edited ? "is-edited" : ""}" data-difficulty="${level.difficulty}">
         <div class="thumb">
           <img src="${encodeURI(level.image)}" alt="${escapeText(title)}路径图" loading="lazy">
-          <span class="badge">Dungeon ${String(level.difficulty).padStart(2, "0")}</span>
+          <span class="badge">${level.edited ? "已编辑 · " : ""}Dungeon ${String(level.difficulty).padStart(2, "0")}</span>
         </div>
         <div class="content">
           <h2>${escapeText(title)}</h2>
@@ -1299,6 +1394,7 @@
           </div>
           <div class="card-actions">
             <a class="ghost download-link dungeon-png-download" href="${encodeURI(level.image)}" download="打金猪_难度${String(level.difficulty).padStart(2, "0")}_地图${String(level.mapId).padStart(3, "0")}.png">下载 PNG</a>
+            <button class="success dungeon-edit" type="button" data-difficulty="${level.difficulty}">编辑路径</button>
           </div>
         </div>
       </article>`;
@@ -1328,7 +1424,10 @@
 
     function matchesSearch(level, query) {
       if (!query) return true;
-      return [level.id, level.name, level.nameEn, level.image].join(" ").toLowerCase().includes(query.toLowerCase());
+      return [level.id, level.name, level.nameEn, level.image, level.difficulty, level.mapId, level.enemyId]
+        .join(" ")
+        .toLowerCase()
+        .includes(query.toLowerCase());
     }
 
     function renderGrid() {
@@ -1355,8 +1454,7 @@
       if (!level) return;
       const previewImage = pathPreviewImage(level, 1200, 900);
       if (!previewImage) {
-        selectedLevelId = levelKey(level);
-        setView("editor");
+        beginEditorSession("main", levelKey(level));
         return;
       }
       document.querySelector("#modalTitle").textContent = `关卡 ${String(level.id).padStart(3, "0")} · ${level.name}`;
@@ -1370,6 +1468,11 @@
     document.querySelector("#dungeonGrid").addEventListener("click", event => {
       const downloadButton = event.target.closest(".dungeon-png-download");
       if (downloadButton) return;
+      const editButton = event.target.closest(".dungeon-edit");
+      if (editButton) {
+        openDungeonEditor(editButton.dataset.difficulty);
+        return;
+      }
       const card = event.target.closest(".dungeon-card");
       if (!card) return;
       const level = resolvedDungeonLevels().find(item => Number(item.difficulty) === Number(card.dataset.difficulty));
@@ -1387,6 +1490,7 @@
     });
 
     function renderEditor() {
+      configureEditorMode();
       renderLevelList();
       renderLayers();
       renderProperties();
@@ -1394,13 +1498,38 @@
       drawCanvas();
     }
 
+    function configureEditorMode() {
+      const isDungeon = editorScope === "dungeon";
+      document.querySelector("#editorEyebrow").textContent = isDungeon ? "dungeon path edit mode" : "path edit mode";
+      document.querySelector("#editorTitle").textContent = isDungeon ? "副本路径编辑器" : "关卡路径编辑器";
+      document.querySelector("#editorDescription").textContent = isDungeon
+        ? "选择打金猪难度，在画布上移动、增删或重绘敌人路径节点。"
+        : "新建关卡、选择现有关卡，用画笔直接绘制敌人路径；可以拖动节点微调，也可以用橡皮删除节点或整条路径。";
+      document.querySelector("#editorHint").textContent = isDungeon
+        ? "保存后，副本预览和路径统计会同步更新；可在副本页复制已编辑配置。"
+        : "保存后点击“导出 Excel”，导出的路径点会和编辑器当前保存的形状保持一致。";
+      document.querySelector("#levelManagerTitle").textContent = isDungeon ? "副本难度" : "关卡管理";
+      document.querySelector("#levelManagerHint").textContent = isDungeon
+        ? "难度 1-10 分别对应敌人 999-990。"
+        : "按关卡顺序管理路径，可复制现有关卡或从空白模板创建。";
+      document.querySelector("#levelSearch").placeholder = isDungeon ? "搜索难度、地图或敌人 ID" : "搜索关卡";
+      document.querySelector("#blankLevel").hidden = isDungeon;
+      document.querySelector("#newFromBlank").hidden = isDungeon;
+      document.querySelector("#restoreDungeonPath").hidden = !isDungeon;
+      document.querySelector("#quickCreate").style.display = isDungeon ? "none" : "grid";
+      document.querySelector("#addLayer").hidden = isDungeon;
+      document.querySelector(".chest-card").style.display = isDungeon ? "none" : "block";
+      document.querySelector("#levelIdInput").disabled = isDungeon;
+      document.querySelector("#levelNameInput").disabled = isDungeon;
+    }
+
     function renderLevelList() {
       const query = document.querySelector("#levelSearch").value.trim();
-      const items = levels
+      const items = editorLevels()
         .filter(level => matchesSearch(level, query))
         .sort((a, b) => Number(a.id) - Number(b.id) || levelKey(a).localeCompare(levelKey(b)))
         .map(level => `<button class="level-item ${levelKey(level) === String(selectedLevelId) ? "active" : ""}" data-key="${escapeText(levelKey(level))}">
-          <div><strong>${String(level.id).padStart(3, "0")} · ${escapeText(level.name)}</strong><span>${level.pathCount || 0}条路径 · ${pointTotal(level)}节点 · ${chestCount(level)}宝箱</span></div><span>›</span>
+          <div><strong>${editorScope === "dungeon" ? `难度 ${level.difficulty}` : `${String(level.id).padStart(3, "0")} · ${escapeText(level.name)}`}</strong><span>${editorScope === "dungeon" ? `地图 ${level.mapId} · 敌人 ${level.enemyId} · ` : ""}${pointTotal(level)}节点${level.edited ? " · 已编辑" : ""}</span></div><span>›</span>
         </button>`)
         .join("");
       document.querySelector("#levelList").innerHTML = items;
@@ -1425,7 +1554,8 @@
 
     function renderLayers() {
       const level = currentLevel();
-      const layerHtml = Array.from({ length: Math.max(5, level.paths.length) }, (_, index) => {
+      const layerCount = editorScope === "dungeon" ? 1 : Math.max(5, level.paths.length);
+      const layerHtml = Array.from({ length: layerCount }, (_, index) => {
         const points = level.paths[index] || [];
         return `<button class="layer ${index === activePathIndex ? "active" : ""}" data-path="${index}">
           <span class="layer-left"><span class="color-dot" style="background:${colors[index % colors.length]}"></span>龙${index + 1}路径</span>
@@ -1447,8 +1577,12 @@
       const level = currentLevel();
       if (!level) return;
       syncFlatBoxes(level);
-      document.querySelector("#canvasTitle").textContent = `编辑画布 · 关卡 ${String(level.id).padStart(3, "0")}`;
-      document.querySelector("#canvasSub").textContent = `正在编辑：龙${activePathIndex + 1}路径 / ${toolLabel(tool)} / ${chestCount(level)}宝箱`;
+      document.querySelector("#canvasTitle").textContent = editorScope === "dungeon"
+        ? `编辑画布 · 打金猪难度 ${level.difficulty}`
+        : `编辑画布 · 关卡 ${String(level.id).padStart(3, "0")}`;
+      document.querySelector("#canvasSub").textContent = editorScope === "dungeon"
+        ? `地图 ${level.mapId} · 敌人 ${level.enemyId} / ${toolLabel(tool)} / ${pointTotal(level)}节点`
+        : `正在编辑：龙${activePathIndex + 1}路径 / ${toolLabel(tool)} / ${chestCount(level)}宝箱`;
       document.querySelector("#levelIdInput").value = level.id;
       document.querySelector("#levelNameInput").value = level.name;
       const point = selectedNodeIndex == null ? null : currentPath()[selectedNodeIndex];
@@ -1502,12 +1636,14 @@
     }
 
     document.querySelector("#levelIdInput").addEventListener("change", event => {
+      if (editorScope === "dungeon") return;
       pushHistory();
       currentLevel().id = Number(event.target.value);
       persistAndRender();
     });
 
     document.querySelector("#levelNameInput").addEventListener("input", event => {
+      if (editorScope === "dungeon") return;
       currentLevel().name = event.target.value;
       persistAndRender(false);
     });
@@ -2338,22 +2474,27 @@
     }
 
     function pushHistory() {
-      history.push(clone(levels));
+      history.push(clone(editorLevels()));
       if (history.length > 50) history.shift();
       future = [];
     }
 
+    function restoreEditorSnapshot(snapshot) {
+      if (editorScope === "dungeon") dungeonLevels = snapshot;
+      else levels = snapshot;
+    }
+
     document.querySelector("#undo").addEventListener("click", () => {
       if (!history.length) return;
-      future.push(clone(levels));
-      levels = history.pop();
+      future.push(clone(editorLevels()));
+      restoreEditorSnapshot(history.pop());
       persistAndRender();
     });
 
     document.querySelector("#redo").addEventListener("click", () => {
       if (!future.length) return;
-      history.push(clone(levels));
-      levels = future.pop();
+      history.push(clone(editorLevels()));
+      restoreEditorSnapshot(future.pop());
       persistAndRender();
     });
 
@@ -2370,12 +2511,19 @@
     function persistAndRender(save = true) {
       excelExportCache = null;
       refreshCounts(currentLevel());
-      if (save) persistLevels();
+      if (save && editorScope === "dungeon") {
+        currentLevel().edited = !dungeonPathIsOriginal(currentLevel());
+        persistDungeonLevels();
+      } else if (save) {
+        persistLevels();
+      }
       if (activeView === "viewer") renderGrid();
+      else if (activeView === "dungeon") renderDungeonGrid();
       else renderEditor();
     }
 
     document.querySelector("#addLayer").addEventListener("click", () => {
+      if (editorScope === "dungeon") return;
       pushHistory();
       const level = currentLevel();
       level.paths.push([]);
@@ -2417,6 +2565,7 @@
     }
 
     function createBlankLevel(copyCurrent = false) {
+      if (editorScope === "dungeon") return;
       const id = Number(document.querySelector("#newLevelId").value) || Math.max(...levels.map(item => Number(item.id))) + 1;
       const name = document.querySelector("#newLevelName").value.trim() || "新关卡";
       const source = copyCurrent ? currentLevel() : null;
@@ -2437,14 +2586,36 @@
     document.querySelector("#blankLevel").addEventListener("click", () => createBlankLevel(false));
     document.querySelector("#newFromBlank").addEventListener("click", () => createBlankLevel(false));
 
+    document.querySelector("#restoreDungeonPath").addEventListener("click", () => {
+      if (editorScope !== "dungeon") return;
+      const level = currentLevel();
+      const original = window.dungeonPathData?.[String(level.difficulty)]?.points || [];
+      pushHistory();
+      level.paths = [clone(original)];
+      level.edited = false;
+      activePathIndex = 0;
+      clearNodeSelection();
+      viewportBoundsByLevel.delete(levelKey(level));
+      persistAndRender();
+    });
+
     document.querySelector("#saveLocal").addEventListener("click", () => {
-      persistLevels();
-      alert("已保存到浏览器本地存储。导出 Excel 会使用当前已保存的形状和路径。");
+      if (editorScope === "dungeon") {
+        currentLevel().edited = !dungeonPathIsOriginal(currentLevel());
+        persistDungeonLevels();
+        renderEditor();
+        alert("副本路径已保存。可返回副本页复制已编辑配置并直接粘贴到 Excel。");
+      } else {
+        persistLevels();
+        alert("已保存到浏览器本地存储。导出 Excel 会使用当前已保存的形状和路径。");
+      }
     });
 
     document.querySelector("#downloadPng").addEventListener("click", () => {
       const link = document.createElement("a");
-      link.download = `level_${String(currentLevel().id).padStart(3, "0")}_edited_paths.png`;
+      link.download = editorScope === "dungeon"
+        ? `dungeon_${String(currentLevel().difficulty).padStart(2, "0")}_edited_path.png`
+        : `level_${String(currentLevel().id).padStart(3, "0")}_edited_paths.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     });
@@ -2610,6 +2781,80 @@
       });
       return zip;
     }
+
+    function currentDungeonExportRecords() {
+      const configByDifficulty = new Map(dungeonConfigRecords.map(record => [Number(record.difficulty), record]));
+      return dungeonConfigs.map(config => {
+        const base = configByDifficulty.get(Number(config.difficulty)) || {};
+        const editorLevel = dungeonLevels.find(level => Number(level.difficulty) === Number(config.difficulty));
+        return {
+          difficulty: config.difficulty,
+          map_id: config.mapId,
+          enemy_id: config.enemyId,
+          node_hp: clone(base.node_hp || []),
+          chest_positions_and_grades: clone(base.chest_positions_and_grades || []),
+          dragon1_path: clone(editorLevel?.paths?.[0] || base.dragon1_path || []),
+        };
+      });
+    }
+
+    function refreshDungeonExportLinks() {
+      const excelLink = document.querySelector("#exportDungeonExcel");
+      const jsonLink = document.querySelector("#exportDungeonJson");
+      const copyButton = document.querySelector("#copyDungeonConfig");
+      if (!excelLink || !jsonLink || !copyButton) return;
+      const edited = hasDungeonEdits();
+      excelLink.href = excelLink.dataset.staticHref;
+      excelLink.download = "打金猪副本路径.xlsx";
+      excelLink.textContent = edited ? "导出原始 Excel" : "导出副本 Excel";
+      jsonLink.href = jsonLink.dataset.staticHref;
+      jsonLink.download = "打金猪副本路径.json";
+      jsonLink.textContent = edited ? "导出原始 JSON" : "导出副本 JSON";
+      copyButton.hidden = !edited;
+    }
+
+    async function copyTextToClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+        return copied;
+      }
+    }
+
+    document.querySelector("#copyDungeonConfig").addEventListener("click", async () => {
+      const button = document.querySelector("#copyDungeonConfig");
+      if (!dungeonConfigRecords.length) {
+        button.textContent = "配置加载中";
+        return;
+      }
+      const rows = [
+        ["节点生命", "宝箱位置品级", "龙1路径"],
+        ...currentDungeonExportRecords().map(record => [
+          jsonCell(record.node_hp),
+          jsonCell(record.chest_positions_and_grades),
+          jsonCell(record.dragon1_path),
+        ]),
+      ];
+      const text = rows.map(row => row.join("\t")).join("\n");
+      try {
+        const copied = await copyTextToClipboard(text);
+        if (!copied) throw new Error("copy failed");
+        button.textContent = "已复制 10 个难度";
+      } catch {
+        button.textContent = "复制失败";
+      }
+      setTimeout(() => { button.textContent = "复制已编辑配置"; }, 1800);
+    });
 
     function savedLevelsForExport() {
       levels.forEach(syncFlatBoxes);

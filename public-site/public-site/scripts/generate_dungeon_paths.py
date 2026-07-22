@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import shutil
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -11,6 +12,8 @@ SOURCE_ROOT = Path(os.environ.get(
     "DUNGEON_SOURCE_ROOT",
     "/Users/wuchen/Desktop/破解工具/不服来通关/安卓资源解密输出/decrypted_by_original_path",
 ))
+CONFIG_JSON = os.environ.get("DUNGEON_CONFIG_JSON")
+WORKBOOK_SOURCE = os.environ.get("DUNGEON_WORKBOOK_SOURCE")
 
 CONFIGS = [
     (1, 3, 999, 20, "a96c5578-45c7-4856-8647-fe23c6ff40ca.182bb.json"),
@@ -30,6 +33,13 @@ def load_points(file_name):
     container = json.loads((SOURCE_ROOT / file_name).read_text())
     points = container[5][0][2]["1"]
     return [[float(point["x"]), float(point["y"])] for point in points]
+
+
+def load_config_records():
+    if not CONFIG_JSON:
+        return {}
+    records = json.loads(Path(CONFIG_JSON).read_text())
+    return {int(record["difficulty"]): record for record in records}
 
 
 def runtime_point_count(points, interval=50):
@@ -107,10 +117,17 @@ def render_path(record, output_path):
 
 def main():
     records = {}
+    config_records = load_config_records()
     assets = REPO_ROOT / "assets"
     assets.mkdir(exist_ok=True)
     for difficulty, map_id, enemy_id, coin, file_name in CONFIGS:
-        points = load_points(file_name)
+        config_record = config_records.get(difficulty)
+        if config_record:
+            if int(config_record["map_id"]) != map_id or int(config_record["enemy_id"]) != enemy_id:
+                raise ValueError(f"Difficulty {difficulty} mapping does not match the site configuration")
+            points = config_record["dragon1_path"]
+        else:
+            points = load_points(file_name)
         record = {
             "difficulty": difficulty,
             "mapId": map_id,
@@ -127,6 +144,13 @@ def main():
 
     payload = json.dumps(records, ensure_ascii=False, separators=(",", ":"))
     (assets / "dungeon-paths.js").write_text(f"window.dungeonPathData={payload};\n")
+    if config_records:
+        ordered_configs = [config_records[difficulty] for difficulty, *_ in CONFIGS]
+        (assets / "dungeon_paths.json").write_text(
+            json.dumps(ordered_configs, ensure_ascii=False, indent=2) + "\n"
+        )
+    if WORKBOOK_SOURCE:
+        shutil.copyfile(WORKBOOK_SOURCE, assets / "dungeon_paths.xlsx")
     print(f"Generated {sum(item['rawPointCount'] for item in records.values())} control points")
     print(f"Generated {sum(item['runtimePointCount'] for item in records.values())} runtime points")
 
