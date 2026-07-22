@@ -203,6 +203,21 @@
       border-radius: 26px;
     }
 
+    .toolbar-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-left: auto;
+    }
+
+    .download-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      text-decoration: none;
+    }
+
     .search {
       flex: 1 1 330px;
       height: 52px;
@@ -295,6 +310,8 @@
     .pill { padding: 7px 10px; border-radius: 999px; color: #344054; background: #f2f4f7; font-size: 12px; font-weight: 900; }
     .dungeon-card .badge { background: rgba(182, 83, 9, .78); }
     .dungeon-card .thumb { background: linear-gradient(135deg, rgba(255,149,0,.16), rgba(52,199,89,.08)), #f8fafc; }
+    .card-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+    .card-actions .download-link { min-height: 38px; padding: 0 13px; border-radius: 12px; font-size: 13px; }
 
     .editor-layout {
       display: grid;
@@ -697,6 +714,10 @@
 
       <section class="toolbar">
         <input id="dungeonSearch" class="search" type="search" placeholder="搜索难度、地图 ID 或敌人 ID，比如 5 / 64 / 995">
+        <div class="toolbar-actions">
+          <a class="success download-link" href="assets/dungeon_paths.xlsx" download="打金猪副本路径.xlsx">导出副本 Excel</a>
+          <a class="ghost download-link" href="assets/dungeon_paths.json" download="打金猪副本路径.json">导出副本 JSON</a>
+        </div>
       </section>
       <section id="dungeonGrid" class="grid"></section>
       <section id="dungeonEmpty" class="empty">没有找到匹配的副本路径。</section>
@@ -1276,6 +1297,9 @@
             <span class="pill">${level.runtimePointCount} 行走点</span>
             <span class="pill">${level.pathLength.toFixed(1)} 路径长度</span>
           </div>
+          <div class="card-actions">
+            <a class="ghost download-link dungeon-png-download" href="${encodeURI(level.image)}" download="打金猪_难度${String(level.difficulty).padStart(2, "0")}_地图${String(level.mapId).padStart(3, "0")}.png">下载 PNG</a>
+          </div>
         </div>
       </article>`;
     }
@@ -1344,6 +1368,8 @@
     document.querySelector("#dungeonSearch").addEventListener("input", renderDungeonGrid);
 
     document.querySelector("#dungeonGrid").addEventListener("click", event => {
+      const downloadButton = event.target.closest(".dungeon-png-download");
+      if (downloadButton) return;
       const card = event.target.closest(".dungeon-card");
       if (!card) return;
       const level = resolvedDungeonLevels().find(item => Number(item.difficulty) === Number(card.dataset.difficulty));
